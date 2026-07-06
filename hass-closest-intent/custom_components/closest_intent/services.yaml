@@ -1,0 +1,77 @@
+dump_candidates:
+  name: Dump candidates
+  description: >-
+    Log the current candidate pool, expansion rules, and slot lists for every loaded Closest Intent agent.
+  fields:
+    include_builtins:
+      name: Include built-in intents
+      description: >-
+        Also build and include HomeAssistant's built-in intent candidates in the dump.
+        Combine with `intent_filter` to keep output manageable.
+      default: false
+      selector:
+        boolean:
+    intent_filter:
+      name: Intent name filter
+      description: >-
+        Case-insensitive substring.
+      required: false
+      example: HassTurnOn
+      selector:
+        text:
+    include_exposure:
+      name: Include exposure diagnostic
+      description: >-
+        Add a per-entity breakdown of which states are exposed to Assist.
+        Useful when an entity doesn't show up in slot lists, noisy otherwise.
+      default: false
+      selector:
+        boolean:
+
+parse_sentence:
+  name: Parse sentence
+  description: >-
+    Run a sentence through the Closest Intent matcher and return what it would match.
+  fields:
+    sentence:
+      name: Sentence
+      description: Sentence to try to parse.
+      required: true
+      example: turn on kichen lite
+      selector:
+        text:
+    language:
+      name: Language
+      description: Defaults to Home Assistant's configured language.
+      required: false
+      selector:
+        language:
+    entry_id:
+      name: Closest Intent agent
+      description: Defaults to the first loaded agent.
+      required: false
+      selector:
+        config_entry:
+          integration: closest_intent
+    include_builtins:
+      name: Include built-in intents
+      description: >-
+        Also match against HomeAssistant's built-in intents (HassTurnOn,...).
+      default: false
+      selector:
+        boolean:
+    run_official:
+      name: Pass on to Hassil
+      description: >-
+        Whether to pass the parsed/canonicalized sentence to HomeAssistant's own parser.
+        Does not execute the intent/action.
+      default: false
+      selector:
+        boolean:
+    debug_top_candidates:
+      name: Include top scored candidates (debug)
+      description: >-
+        Include the top 10 raw-scored candidates in the response.
+      default: false
+      selector:
+        boolean:

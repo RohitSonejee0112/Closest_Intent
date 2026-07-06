@@ -1,0 +1,265 @@
+"""
+Config + options flow for closest_intent.
+
+Offers entry points both for YAML and UI config.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import voluptuous as vol
+from homeassistant import config_entries
+from homeassistant.core import callback
+from homeassistant.helpers import selector
+
+from .const import (
+    CONF_BUILTIN_ALLOWLIST,
+    CONF_DENYLIST,
+    CONF_EXPANSION_CAP,
+    CONF_FALLBACK_AGENT,
+    CONF_INCLUDE_BUILTINS,
+    CONF_SLOT_EXTRACTION,
+    CONF_SLOT_THRESHOLD,
+    CONF_STARTUP_SELF_CHECK,
+    CONF_SUGGESTIONS,
+    CONF_THRESHOLD,
+    DEFAULT_EXPANSION_CAP,
+    DEFAULT_FALLBACK_AGENT,
+    DEFAULT_INCLUDE_BUILTINS,
+    DEFAULT_SLOT_EXTRACTION,
+    DEFAULT_STARTUP_SELF_CHECK,
+    DEFAULT_SUGGESTIONS,
+    DEFAULT_THRESHOLD,
+    DOMAIN,
+    KEY_CONVERSATION_INTENTS,
+)
+
+
+def _discovered_intent_names(hass) -> list[str]:
+    """
+    Best-effort list of intent names known at flow time.
+
+    Pulled from the YAML stash populated by ``async_setup``.
+    Empty when the user is configuring through the UI without any
+    ``conversation.intents`` block.
+    """
+    stash = hass.data.get(DOMAIN, {}) or {}
+    intents = stash.get(KEY_CONVERSATION_INTENTS, {}) or {}
+    return sorted(intents.keys())
+
+
+def _build_schema(
+    hass,
+    defaults: dict[str, Any],
+) -> vol.Schema:
+    """Schema shared by user + options flows."""
+    discovered = _discovered_intent_names(hass)
+
+    if discovered:
+        denylist_selector = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=discovered,
+                multiple=True,
+                custom_value=True,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
+    else:
+        # No intents discovered yet (UI-only setup). Fall back to a free-form
+        # text-list selector so users can still type names.
+        denylist_selector = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[],
+                multiple=True,
+                custom_value=True,
+                mode=selector.SelectSelectorMode.LIST,
+            )
+        )
+
+    fallback_agent_default = defaults.get(CONF_FALLBACK_AGENT, DEFAULT_FALLBACK_AGENT)
+    denylist_default = defaults.get(CONF_DENYLIST) or []
+
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_THRESHOLD,
+                default=defaults.get(CONF_THRESHOLD, DEFAULT_THRESHOLD),
+                description="Match threshold (higher = stricter)",
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0, max=100, step=1, mode=selector.NumberSelectorMode.SLIDER
+                )
+            ),
+            vol.Required(
+                CONF_SLOT_THRESHOLD,
+                default=defaults.get(
+                    CONF_SLOT_THRESHOLD,
+                    defaults.get(CONF_THRESHOLD, DEFAULT_THRESHOLD),
+                ),
+                description=(
+                    "Slot match threshold (higher = stricter).",
+                    "Lower this if intent matching works well, but slot values often fail to match",
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0, max=100, step=1, mode=selector.NumberSelectorMode.SLIDER
+                )
+            ),
+            vol.Required(
+                CONF_EXPANSION_CAP,
+                default=defaults.get(CONF_EXPANSION_CAP, DEFAULT_EXPANSION_CAP),
+                description="Pattern expansion cap (0 disables [...] / (a|b))",
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0, max=512, step=1, mode=selector.NumberSelectorMode.BOX
+                )
+            ),
+            vol.Optional(
+                CONF_DENYLIST,
+                default=denylist_default,
+                description="Exclude these intent names from matching (empty = none excluded)",
+            ): denylist_selector,
+            vol.Required(
+                CONF_SLOT_EXTRACTION,
+                default=defaults.get(CONF_SLOT_EXTRACTION, DEFAULT_SLOT_EXTRACTION),
+                description="Extract slot values from user speech",
+            ): selector.BooleanSelector(),
+            vol.Required(
+                CONF_STARTUP_SELF_CHECK,
+                default=defaults.get(CONF_STARTUP_SELF_CHECK, DEFAULT_STARTUP_SELF_CHECK),
+                description=(
+                    "On startup, verify that each custom intent's own patterns still "
+                    "select that intent. Raises a repair issue if clashes are found."
+                ),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                CONF_SUGGESTIONS,
+                default=defaults.get(CONF_SUGGESTIONS, DEFAULT_SUGGESTIONS),
+                description=(
+                    "When nothing clears the match threshold, respond with a "
+                    "'did you mean ...?' prompt naming the closest near-misses "
+                    "instead of forwarding to the fallback agent."
+                ),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                CONF_INCLUDE_BUILTINS,
+                default=defaults.get(CONF_INCLUDE_BUILTINS, DEFAULT_INCLUDE_BUILTINS),
+                description=(
+                    "Also fuzzy-match Home Assistant's built-in intents "
+                    "(HassTurnOn etc.). Not recommended"
+                ),
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_BUILTIN_ALLOWLIST,
+                default=defaults.get(CONF_BUILTIN_ALLOWLIST) or [],
+                description=(
+                    "Specific built-in intent names to always consider, even when "
+                    "the include-builtins toggle above is off."
+                ),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[],
+                    multiple=True,
+                    custom_value=True,
+                    mode=selector.SelectSelectorMode.LIST,
+                )
+            ),
+            vol.Required(
+                CONF_FALLBACK_AGENT,
+                default=fallback_agent_default,
+                description=(
+                    "Fallback conversation agent (used only when hassil errors or returns no match)"
+                ),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="conversation")),
+        }
+    )
+
+
+def _normalise(user_input: dict[str, Any]) -> dict[str, Any]:
+    """Coerce selector outputs into the types the entity expects."""
+    out = dict(user_input)
+    if CONF_THRESHOLD in out:
+        out[CONF_THRESHOLD] = int(out[CONF_THRESHOLD])
+    if CONF_SLOT_THRESHOLD in out and out[CONF_SLOT_THRESHOLD] is not None:
+        out[CONF_SLOT_THRESHOLD] = int(out[CONF_SLOT_THRESHOLD])
+    if CONF_EXPANSION_CAP in out:
+        out[CONF_EXPANSION_CAP] = int(out[CONF_EXPANSION_CAP])
+    deny = out.get(CONF_DENYLIST)
+    if not deny:
+        out[CONF_DENYLIST] = None
+    allow = out.get(CONF_BUILTIN_ALLOWLIST)
+    if not allow:
+        out[CONF_BUILTIN_ALLOWLIST] = None
+    return out
+
+
+class ClosestIntentConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for closest_intent."""
+
+    VERSION = 1
+
+    async def async_step_import(self, import_data: dict[str, Any]) -> Any:
+        """
+        Handle a YAML import.
+
+        YAML remains the source of truth when present: subsequent
+        imports overwrite the existing entry's ``data`` so edits to
+        ``configuration.yaml`` propagate on restart.
+        """
+        await self.async_set_unique_id(DOMAIN)
+        self._abort_if_unique_id_configured(updates=import_data)
+        return self.async_create_entry(title="Closest Intent", data=import_data)
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> Any:
+        """UI setup. Single step. Same fields as options flow."""
+        await self.async_set_unique_id(DOMAIN)
+        self._abort_if_unique_id_configured()
+
+        if user_input is not None:
+            return self.async_create_entry(
+                title="Closest Intent",
+                data=_normalise(user_input),
+            )
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=_build_schema(self.hass, defaults={}),
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> ClosestIntentOptionsFlow:
+        return ClosestIntentOptionsFlow(config_entry)
+
+
+class ClosestIntentOptionsFlow(config_entries.OptionsFlow):
+    """
+    Live-tweak any field after initial setup.
+
+    Note for YAML users: options here override YAML on a per-key basis.
+    To return to YAML-only behaviour, clear the override in the UI.
+    The entity falls back to ``entry.data`` (i.e. the latest YAML import).
+    """
+
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        # Don't assign to self.config_entry. Newer HA versions provide
+        # it as a read-only property and writing raises a deprecation
+        # warning. Stash a reference for our own use instead.
+        self._entry = config_entry
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> Any:
+        if user_input is not None:
+            return self.async_create_entry(title="", data=_normalise(user_input))
+
+        # Defaults: prefer existing options, fall back to YAML data.
+        defaults: dict[str, Any] = {}
+        defaults.update(self._entry.data or {})
+        defaults.update(self._entry.options or {})
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=_build_schema(self.hass, defaults=defaults),
+        )
