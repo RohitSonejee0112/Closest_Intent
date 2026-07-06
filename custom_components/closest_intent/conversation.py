@@ -466,6 +466,8 @@ class ClosestIntentAgent(conversation.ConversationEntity):
                         if not isinstance(a, dict):
                             continue
                         triggers = a.get("triggers", a.get("trigger", []))
+                        if not triggers:
+                            continue
                         if isinstance(triggers, dict):
                             triggers = [triggers]
                         for t in triggers:
