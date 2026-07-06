@@ -454,6 +454,31 @@ class ClosestIntentAgent(conversation.ConversationEntity):
             else:
                 user_intents[name] = sentences
 
+        # (3) Load conversation triggers from automation.yaml
+        try:
+            import yaml
+            import os
+            auto_path = self.hass.config.path("automation.yaml")
+            if os.path.exists(auto_path):
+                with open(auto_path, "r", encoding="utf-8") as f:
+                    autos = yaml.safe_load(f)
+                    for a in (autos or []):
+                        if not isinstance(a, dict):
+                            continue
+                        triggers = a.get("triggers", a.get("trigger", []))
+                        if isinstance(triggers, dict):
+                            triggers = [triggers]
+                        for t in triggers:
+                            if isinstance(t, dict) and (t.get("trigger") == "conversation" or t.get("platform") == "conversation"):
+                                cmds = t.get("command", [])
+                                if isinstance(cmds, str):
+                                    cmds = [cmds]
+                                if cmds:
+                                    intent_name = f"automation_{a.get('id', 'unknown')}_{len(user_intents)}"
+                                    user_intents[intent_name] = cmds
+        except Exception as e:
+            _LOGGER.error("Failed to load automations for closest_intent: %s", e)
+
         _LOGGER.info(
             "[%s] vocabulary: %d slot list(s), %d expansion rule(s), %d user / "
             "%d builtin intent(s)",
