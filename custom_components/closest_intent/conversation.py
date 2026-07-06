@@ -209,6 +209,7 @@ class ClosestIntentAgent(conversation.ConversationEntity):
         self._pool_locks: dict[str, asyncio.Lock] = {}
         self._builtin_intents_cache: dict[str, dict[str, list[str]]] = {}
         self._self_check_issue_ids: dict[str, str] = {}
+        self._pending_suggestions: dict[str, tuple[float, list[str]]] = {}
         self._rebuild_handle = None  # async_call_later cancel handle
         self._unsub_listeners: list = []
 
@@ -596,6 +597,41 @@ class ClosestIntentAgent(conversation.ConversationEntity):
     async def async_process(
         self, user_input: conversation.ConversationInput
     ) -> conversation.ConversationResult:
+        now = time.time()
+        self._pending_suggestions = {
+            cid: data for cid, data in self._pending_suggestions.items() if now - data[0] < 60
+        }
+
+        conv_id = user_input.conversation_id
+        if conv_id and conv_id in self._pending_suggestions:
+            _, phrases = self._pending_suggestions.pop(conv_id)
+            text_lower = user_input.text.lower().strip()
+            affirm_1 = ["yes", "yep", "yeah", "do it", "implement that", "first", "the first one", "1"]
+            affirm_2 = ["second", "the second one", "2"]
+
+            forwarded_text = None
+            if any(text_lower == aff or text_lower.startswith(aff + " ") for aff in affirm_1) and phrases:
+                forwarded_text = phrases[0]
+            elif len(phrases) > 1 and any(text_lower == aff or text_lower.startswith(aff + " ") for aff in affirm_2):
+                forwarded_text = phrases[1]
+
+            if forwarded_text:
+                _LOGGER.info("Affirmation detected. Forwarding: %r", forwarded_text)
+                try:
+                    return await conversation.async_converse(
+                        hass=self.hass,
+                        text=forwarded_text,
+                        conversation_id=user_input.conversation_id,
+                        context=user_input.context,
+                        language=user_input.language,
+                        agent_id=_HASSIL_AGENT_ID,
+                        device_id=user_input.device_id,
+                        satellite_id=user_input.satellite_id,
+                        extra_system_prompt=user_input.extra_system_prompt,
+                    )
+                except Exception:
+                    _LOGGER.exception("forward to hassil failed for %r", forwarded_text)
+
         language = user_input.language or self.hass.config.language or "en"
         try:
             resolver, user_candidates, builtin_candidates = await self._async_get_pool(language)
@@ -769,6 +805,9 @@ class ClosestIntentAgent(conversation.ConversationEntity):
                 phrases.append(phrase)
         if not phrases:
             return None
+
+        if user_input.conversation_id:
+            self._pending_suggestions[user_input.conversation_id] = (time.time(), phrases)
 
         quoted = [f'"{p}"' for p in phrases]
         speech = "Sorry, I'm not sure I understood. Did you mean " + " or ".join(quoted) + "?"
