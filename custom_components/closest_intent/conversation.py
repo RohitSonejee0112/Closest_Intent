@@ -458,26 +458,32 @@ class ClosestIntentAgent(conversation.ConversationEntity):
         try:
             import yaml
             import os
-            auto_path = self.hass.config.path("automation.yaml")
-            if os.path.exists(auto_path):
-                with open(auto_path, "r", encoding="utf-8") as f:
-                    autos = yaml.safe_load(f)
-                    for a in (autos or []):
-                        if not isinstance(a, dict):
-                            continue
-                        triggers = a.get("triggers", a.get("trigger", []))
-                        if not triggers:
-                            continue
-                        if isinstance(triggers, dict):
-                            triggers = [triggers]
-                        for t in triggers:
-                            if isinstance(t, dict) and (t.get("trigger") == "conversation" or t.get("platform") == "conversation"):
-                                cmds = t.get("command", [])
-                                if isinstance(cmds, str):
-                                    cmds = [cmds]
-                                if cmds:
-                                    intent_name = f"automation_{a.get('id', 'unknown')}_{len(user_intents)}"
-                                    user_intents[intent_name] = cmds
+            
+            auto_paths = [
+                self.hass.config.path("automation.yaml"),
+                self.hass.config.path("automations.yaml")
+            ]
+            
+            for auto_path in auto_paths:
+                if os.path.exists(auto_path):
+                    with open(auto_path, "r", encoding="utf-8") as f:
+                        autos = yaml.safe_load(f)
+                        for a in (autos or []):
+                            if not isinstance(a, dict):
+                                continue
+                            triggers = a.get("triggers", a.get("trigger", []))
+                            if not triggers:
+                                continue
+                            if isinstance(triggers, dict):
+                                triggers = [triggers]
+                            for t in triggers:
+                                if isinstance(t, dict) and (t.get("trigger") == "conversation" or t.get("platform") == "conversation"):
+                                    cmds = t.get("command", [])
+                                    if isinstance(cmds, str):
+                                        cmds = [cmds]
+                                    if cmds:
+                                        intent_name = f"automation_{a.get('id', 'unknown')}_{len(user_intents)}"
+                                        user_intents[intent_name] = cmds
         except Exception as e:
             _LOGGER.error("Failed to load automations for closest_intent: %s", e)
 
